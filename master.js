@@ -12,7 +12,7 @@ const { Client, GatewayIntentBits } = require('discord.js');
 
 // ==================== CONFIG ====================
 const PORT = process.env.PORT || 10000; // Render dùng PORT=10000 mặc định
-const TOKEN = 'MTQ1Njk2NDc5NDIxMjE1OTcwMg.Gbjcnz.OTQf4MPxvnLklLbUPfeaDSvTCeJMuBxh70tfZM';
+const TOKEN = 'MTQ1Njk2NDc5NDIxMjE1OTcwMg.GTNNaE.4WcVJDNeevxQHgA3ya-tx9CA9s9yW4QanKaNFc';
 const CHANNEL_ID = '1456595444477198508';
 
 // ==================== EXPRESS SERVER ====================
