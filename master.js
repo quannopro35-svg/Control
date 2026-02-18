@@ -14,7 +14,7 @@ const fs = require('fs');
 
 // ==================== CONFIG ====================
 const PORT = process.env.PORT || 10000;
-const TOKEN = 'MTQ1Njk2NDc5NDIxMjE1OTcwMg.GwqGFR.mOSL4JCqw2hIf_cMlVuWZQmANmfOFmDsefuKWQ';
+const TOKEN = 'MTQ1Njk2NDc5NDIxMjE1OTcwMg.GxNoGJ.TJ2YVxoiIFIxF-_s9ju7Uy0zegnIcKRllG11gM';
 const CHANNEL_ID = '1456595444477198508';
 
 // ==================== KIỂM TRA CONFIG ====================
